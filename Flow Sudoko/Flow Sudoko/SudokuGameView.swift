@@ -19,13 +19,25 @@ struct SudokuGameView: View {
     @State private var isFullscreen: Bool = true
     @State private var mistakeCount: Int = 0
     @State private var showExitAlert: Bool = false
+    @State private var puzzleId: Int? = nil
+    @State private var isCompleted: Bool = false
+    @State private var sessionSaved: Bool = false
+    
+    private let sessionManager = SessionManager.shared
+    private let usageTracker = UsageTracker.shared
     
     var body: some View {
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
                 // Sudoku Board (60%)
-                SudokuBoardView(difficulty: difficulty, mistakeCount: $mistakeCount, isFullscreen: $isFullscreen)
-                    .frame(maxWidth: .infinity)
+                SudokuBoardView(
+                    difficulty: difficulty,
+                    mistakeCount: $mistakeCount,
+                    isFullscreen: $isFullscreen,
+                    puzzleId: $puzzleId,
+                    isCompleted: $isCompleted
+                )
+                .frame(maxWidth: .infinity)
                 
                 // Sidebar (40%)
                 VStack(alignment: .leading, spacing: 0) {
@@ -177,6 +189,7 @@ struct SudokuGameView: View {
                             .buttonStyle(.plain)
                             
                             Button(action: {
+                                saveSession()
                                 onExit?()
                             }) {
                                 Text("LEAVE")
@@ -231,6 +244,11 @@ struct SudokuGameView: View {
             timer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
+        .onChange(of: isCompleted) { oldValue, newValue in
+            if newValue && !sessionSaved {
+                saveSession()
+            }
+        }
     }
     
     private func startTimer() {
@@ -244,12 +262,34 @@ struct SudokuGameView: View {
         let secs = seconds % 60
         return String(format: "%02d:%02d", minutes, secs)
     }
+    
+    private func saveSession() {
+        guard !sessionSaved else { return }
+        
+        let session = SessionData(
+            timestamp: Date(),
+            duration: timeElapsed,
+            difficulty: difficulty.rawValue,
+            declutterText: journalText,
+            mistakeCount: mistakeCount,
+            isCompleted: isCompleted,
+            puzzleId: puzzleId
+        )
+        
+        sessionManager.saveSession(session)
+        usageTracker.incrementSessionCount()
+        sessionSaved = true
+        
+        print("✅ Session saved - Duration: \(formatTime(timeElapsed)), Completed: \(isCompleted)")
+    }
 }
 
 struct SudokuBoardView: View {
     let difficulty: Difficulty
     @Binding var mistakeCount: Int
     @Binding var isFullscreen: Bool
+    @Binding var puzzleId: Int?
+    @Binding var isCompleted: Bool
     
     @State private var board: [[SudokuCell]] = []
     @State private var selectedCell: (row: Int, col: Int)? = nil
@@ -538,6 +578,8 @@ struct SudokuBoardView: View {
         
         puzzle = loadedPuzzle
         board = SudokuPuzzleLoader.shared.convertToBoard(loadedPuzzle)
+        puzzleId = loadedPuzzle.id
+        print("✅ Puzzle loaded: ID \(loadedPuzzle.id), Difficulty: \(difficulty)")
     }
     
     private func shouldHighlight(row: Int, col: Int) -> Bool {
@@ -601,10 +643,12 @@ struct SudokuBoardView: View {
         
         if isFilled && allValid {
             isComplete = true
+            isCompleted = true
             // Animate blur effect
             withAnimation(.easeInOut(duration: 1.5)) {
                 blurRadius = 40
             }
+            print("🎉 Puzzle completed!")
         }
     }
 }
@@ -677,6 +721,14 @@ struct SudokuCellView: View {
 #Preview {
     @Previewable @State var mistakes = 0
     @Previewable @State var fullscreen = true
-    SudokuBoardView(difficulty: .medium, mistakeCount: $mistakes, isFullscreen: $fullscreen)
+    @Previewable @State var puzzleId: Int? = nil
+    @Previewable @State var isCompleted = false
+    SudokuBoardView(
+        difficulty: .medium,
+        mistakeCount: $mistakes,
+        isFullscreen: $fullscreen,
+        puzzleId: $puzzleId,
+        isCompleted: $isCompleted
+    )
 }
 

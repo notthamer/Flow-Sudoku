@@ -217,11 +217,11 @@ struct ContentPanel: View {
                     startGame: $startGame
                 )
             case .previousSessions:
-                PlaceholderPanel(title: "Previous Sessions")
+                PreviousSessionsView()
             case .howToPlay:
-                PlaceholderPanel(title: "How to Play")
+                HowToPlayView()
             case .settings:
-                PlaceholderPanel(title: "Settings")
+                SettingsView()
             }
         }
     }
@@ -233,7 +233,22 @@ struct BeginFlowPanel: View {
     @Binding var startGame: Bool
     @State private var showContent: Bool = false
     
+    @ObservedObject private var sessionManager = SessionManager.shared
+    @ObservedObject private var usageTracker = UsageTracker.shared
+    
+    private var canStartSession: Bool {
+        usageTracker.canStartSession(for: sessionManager.preferences.tier)
+    }
+    
     var body: some View {
+        if canStartSession {
+            sessionConfigView
+        } else {
+            UpgradePromptView()
+        }
+    }
+    
+    var sessionConfigView: some View {
         VStack(spacing: 40) {
             Spacer()
             
@@ -284,6 +299,21 @@ struct BeginFlowPanel: View {
                     .opacity(showContent ? 1 : 0)
                     .offset(y: showContent ? 0 : 20)
                     .animation(.easeOut(duration: 0.6).delay(0.4), value: showContent)
+                
+                // Usage indicator for free tier
+                if sessionManager.preferences.tier == .free {
+                    HStack(spacing: 8) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.black.opacity(0.3))
+                        
+                        Text(usageTracker.getUsageText(for: .sessions, tier: sessionManager.preferences.tier))
+                            .font(.system(size: 13, weight: .light))
+                            .foregroundColor(.black.opacity(0.4))
+                    }
+                    .opacity(showContent ? 1 : 0)
+                    .animation(.easeOut(duration: 0.6).delay(0.5), value: showContent)
+                }
             }
             .padding(.horizontal, 80)
             
