@@ -6,6 +6,8 @@
 //
 
 import Foundation
+import Combine
+import WidgetKit
 
 // MARK: - Goal Model
 struct Goal: Codable, Identifiable {
@@ -122,6 +124,9 @@ class GoalManager: ObservableObject {
                 sharedDefaults.set(data, forKey: goalsKey)
                 sharedDefaults.synchronize()
             }
+            
+            // Notify widget to refresh
+            WidgetCenter.shared.reloadTimelines(ofKind: "FlowSudokuWidget")
             
             print("✅ Goals saved (\(goals.count) total)")
         } catch {
