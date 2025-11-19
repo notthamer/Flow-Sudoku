@@ -49,7 +49,13 @@ class AuthService: ObservableObject {
                 NetworkService.shared.saveToken(response.accessToken)
                 
                 // Fetch user profile to get tier
-                let tier = try await fetchUserTier(userId: response.user.id)
+                let tier: UserTier
+                do {
+                    tier = try await fetchUserTier(userId: response.user.id)
+                } catch {
+                    print("⚠️ Failed to fetch user tier, defaulting to free: \(error)")
+                    tier = .free // Default to free if tier fetch fails
+                }
                 
                 // Create user from response
                 let user = User(
@@ -73,8 +79,13 @@ class AuthService: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    print("🔴 Sign in error caught: \(error)")
+                    print("🔴 Error type: \(type(of: error))")
+                    if let networkError = error as? NetworkError {
+                        print("🔴 NetworkError: \(networkError)")
+                    }
                     let authError = self.mapError(error)
-                    print("❌ Sign in error: \(authError.localizedDescription ?? "Unknown error")")
+                    print("❌ Sign in error mapped: \(authError.localizedDescription ?? "Unknown error")")
                     completion(.failure(authError))
                 }
             }
@@ -322,19 +333,53 @@ class AuthService: ObservableObject {
                 return .emailAlreadyExists
             case .noConnection:
                 return .networkError
+            case .decodingError:
+                // Decoding error might mean wrong response format - show actual error
+                return .unknown("Server response format error. Please try again.")
+            case .serverError(let message):
+                // Check if server error message indicates specific auth issues
+                let messageLower = message.lowercased()
+                if messageLower.contains("invalid") && (messageLower.contains("password") || messageLower.contains("login") || messageLower.contains("credentials")) {
+                    return .invalidPassword
+                } else if messageLower.contains("not found") || messageLower.contains("email not found") {
+                    return .userNotFound
+                } else if messageLower.contains("already") || messageLower.contains("exists") {
+                    return .emailAlreadyExists
+                } else {
+                    // Return as unknown with the actual message
+                    return .unknown(message)
+                }
+            case .httpError(let code):
+                // HTTP errors - check if it's a known auth error code
+                if code == 400 {
+                    return .unknown("Invalid request. Please check your email and password.")
+                } else if code == 401 {
+                    return .invalidPassword
+                } else if code == 404 {
+                    return .userNotFound
+                } else {
+                    return .unknown("Server error (HTTP \(code)). Please try again.")
+                }
             default:
-                return .networkError
+                // For other network errors, check the description
+                let desc = networkError.localizedDescription?.lowercased() ?? ""
+                if desc.contains("cannot connect") || desc.contains("network") || desc.contains("connection") {
+                    return .networkError
+                }
+                return .unknown(networkError.localizedDescription ?? "Network error")
             }
         }
         
         // Check error message for common patterns
         let errorMessage = error.localizedDescription.lowercased()
-        if errorMessage.contains("password") || errorMessage.contains("invalid login") {
+        if errorMessage.contains("password") || errorMessage.contains("invalid login") || errorMessage.contains("invalid credentials") {
             return .invalidPassword
         } else if errorMessage.contains("not found") || errorMessage.contains("email not found") {
             return .userNotFound
         } else if errorMessage.contains("already") || errorMessage.contains("exists") {
             return .emailAlreadyExists
+        } else if errorMessage.contains("cannot connect") || errorMessage.contains("network") || errorMessage.contains("connection") {
+            return .networkError
         }
         
         return .unknown(error.localizedDescription)

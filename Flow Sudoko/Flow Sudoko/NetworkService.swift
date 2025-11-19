@@ -45,17 +45,30 @@ class NetworkService {
         }
         
         // Add auth token if required
+        // Note: For Supabase auth endpoints (/auth/v1/*), we only need apikey header
+        // For other endpoints that require auth, we use Bearer token
         if requiresAuth, let token = accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        } else {
-            // For non-auth endpoints, still use the supabase key
+            print("🔑 Using auth token: \(String(token.prefix(20)))...")
+        } else if !endpoint.starts(with: "/auth/v1/") {
+            // For non-auth REST endpoints, use Supabase key in Authorization header
             request.setValue("Bearer \(supabaseKey)", forHTTPHeaderField: "Authorization")
+            print("🔑 Using Supabase API key in Authorization header")
+        } else {
+            // For auth endpoints, apikey header is sufficient
+            print("🔑 Using Supabase API key (auth endpoint)")
         }
         
         // Add body if present
         if let body = body {
-            request.httpBody = try JSONEncoder().encode(body)
+            let bodyData = try JSONEncoder().encode(body)
+            request.httpBody = bodyData
+            if let bodyString = String(data: bodyData, encoding: .utf8) {
+                print("📦 Request body: \(bodyString)")
+            }
         }
+        
+        print("🌐 Making request: \(method.rawValue) \(url.absoluteString)")
         
         let (data, response): (Data, URLResponse)
         do {
@@ -63,16 +76,24 @@ class NetworkService {
         } catch {
             // Check for network connectivity issues
             if let urlError = error as? URLError {
+                print("🔴 URLError: \(urlError.code.rawValue) - \(urlError.localizedDescription)")
                 switch urlError.code {
-                case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost:
+                case .notConnectedToInternet, .networkConnectionLost:
                     throw NetworkError.noConnection
+                case .cannotConnectToHost, .dnsLookupFailed:
+                    throw NetworkError.serverError("Cannot connect to server. Please check your internet connection.")
                 case .timedOut:
                     throw NetworkError.serverError("Request timed out. Please check your connection.")
+                case .secureConnectionFailed, .serverCertificateUntrusted:
+                    throw NetworkError.serverError("SSL connection failed. Please check your connection.")
                 default:
-                    throw NetworkError.serverError("Network error: \(urlError.localizedDescription)")
+                    // Don't assume it's a network error - could be other issues
+                    print("⚠️ URLError code: \(urlError.code.rawValue), description: \(urlError.localizedDescription)")
+                    throw NetworkError.serverError("Connection error: \(urlError.localizedDescription)")
                 }
             }
-            throw NetworkError.serverError("Network error: \(error.localizedDescription)")
+            print("🔴 Unknown error: \(error.localizedDescription)")
+            throw NetworkError.serverError("Error: \(error.localizedDescription)")
         }
         
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -87,6 +108,9 @@ class NetworkService {
         }
         
         guard (200...299).contains(httpResponse.statusCode) else {
+            print("❌ HTTP Error: Status \(httpResponse.statusCode)")
+            print("❌ Response headers: \(httpResponse.allHeaderFields)")
+            
             // Try to decode error response
             if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
                 let errorMessage = errorResponse.error?.message ?? errorResponse.error_description ?? "Unknown error"
@@ -94,7 +118,7 @@ class NetworkService {
                 let messageLower = errorMessage.lowercased()
                 let codeLower = errorCode.lowercased()
                 
-                print("❌ Error: \(errorMessage) (Code: \(errorCode))")
+                print("❌ Decoded Error: \(errorMessage) (Code: \(errorCode))")
                 
                 // Parse Supabase error codes and messages
                 // Supabase uses "invalid_grant" for invalid credentials
@@ -125,12 +149,24 @@ class NetworkService {
                 } else if lowercased.contains("already registered") || lowercased.contains("email exists") || lowercased.contains("already exists") {
                     throw NetworkError.emailExists
                 }
+                
+                // If we can't parse it, return the raw error string
+                throw NetworkError.serverError(errorString)
             }
             
             throw NetworkError.httpError(httpResponse.statusCode)
         }
         
-        return try JSONDecoder().decode(T.self, from: data)
+        // Try to decode response
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch let decodingError {
+            print("❌ Decoding error: \(decodingError)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("❌ Response that failed to decode: \(responseString)")
+            }
+            throw NetworkError.decodingError
+        }
     }
     
     // MARK: - Token Management
