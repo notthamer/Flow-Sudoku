@@ -350,11 +350,11 @@ class AuthService: ObservableObject {
                 }
             default:
                 // For other network errors, check the description
-                let desc = networkError.localizedDescription?.lowercased() ?? ""
+                let desc = networkError.localizedDescription.lowercased()
                 if desc.contains("cannot connect") || desc.contains("network") || desc.contains("connection") {
                     return .networkError
                 }
-                return .unknown(networkError.localizedDescription ?? "Network error")
+                return .unknown(networkError.localizedDescription)
             }
         }
         
