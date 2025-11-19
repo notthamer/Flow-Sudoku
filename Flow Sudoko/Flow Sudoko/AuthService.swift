@@ -49,13 +49,7 @@ class AuthService: ObservableObject {
                 NetworkService.shared.saveToken(response.accessToken)
                 
                 // Fetch user profile to get tier
-                let tier: UserTier
-                do {
-                    tier = try await fetchUserTier(userId: response.user.id)
-                } catch {
-                    print("⚠️ Failed to fetch user tier, defaulting to free: \(error)")
-                    tier = .free // Default to free if tier fetch fails
-                }
+                let tier = await fetchUserTier(userId: response.user.id)
                 
                 // Create user from response
                 let user = User(
@@ -187,13 +181,7 @@ class AuthService: ObservableObject {
                 }
                 
                 // Fetch user tier (defaults to free if profile doesn't exist yet)
-                let tier: UserTier
-                do {
-                    tier = try await fetchUserTier(userId: response.user.id)
-                } catch {
-                    tier = .free
-                    print("⚠️ Could not fetch tier, defaulting to free")
-                }
+                let tier = await fetchUserTier(userId: response.user.id)
                 
                 // Create user from response
                 let user = User(
@@ -227,7 +215,7 @@ class AuthService: ObservableObject {
     
     // MARK: - Helper to fetch user tier from profile
     
-    private func fetchUserTier(userId: String) async throws -> UserTier {
+    private func fetchUserTier(userId: String) async -> UserTier {
         do {
             struct ProfileResponse: Codable {
                 let tier: String
