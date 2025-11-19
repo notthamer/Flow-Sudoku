@@ -96,14 +96,16 @@ enum UserTier: String, Codable {
     
     var sessionLimit: Int {
         switch self {
-        case .free: return 1
+        case .free: 
+            return TestConfig.TEST_MODE ? TestConfig.testFreeSessionLimit : 1
         case .studio: return .max
         }
     }
     
     var goalLimit: Int {
         switch self {
-        case .free: return 3
+        case .free: 
+            return TestConfig.TEST_MODE ? TestConfig.testFreeGoalLimit : 3
         case .studio: return .max
         }
     }
