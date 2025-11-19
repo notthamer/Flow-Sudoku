@@ -483,6 +483,12 @@ struct SignInSheet: View {
                 Spacer()
                 
                 VStack(spacing: 40) {
+                    // Logo
+                    Image("FlowLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 80, height: 80)
+                    
                     Text(isSignUp ? "CREATE ACCOUNT" : "SIGN IN")
                         .font(.custom("Anta-Regular", size: 24))
                         .foregroundColor(.black)
