@@ -22,9 +22,12 @@ struct SudokuGameView: View {
     @State private var puzzleId: Int? = nil
     @State private var isCompleted: Bool = false
     @State private var sessionSaved: Bool = false
+    @State private var showGoals: Bool = false
+    @State private var newGoalText: String = ""
     
     private let sessionManager = SessionManager.shared
     private let usageTracker = UsageTracker.shared
+    private let goalManager = GoalManager.shared
     
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -54,33 +57,59 @@ struct SudokuGameView: View {
                     .padding(.top, isFullscreen ? 40 : 20)
                     .padding(.bottom, isFullscreen ? 30 : 15)
                     
-                    // Declutter section takes remaining space
-                    VStack(alignment: .leading, spacing: isFullscreen ? 16 : 12) {
-                        Text("DECLUTTER")
-                            .font(.custom("Space Grotesk Bold", size: isFullscreen ? 12 : 10))
-                            .foregroundColor(.black.opacity(0.3))
-                            .tracking(3)
-                        
-                        ZStack(alignment: .topLeading) {
-                            TextEditor(text: $journalText)
-                                .font(.system(size: fontSize, weight: .light))
-                                .foregroundColor(.black)
-                                .scrollContentBackground(.hidden)
-                                .background(Color.clear)
-                                .tint(.black) // Typewriter cursor color
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            
-                            if journalText.isEmpty {
-                                Text("Type your first thought...")
-                                    .font(.system(size: fontSize, weight: .light))
-                                    .foregroundColor(.black.opacity(0.3))
-                                    .padding(.top, 0)
-                                    .padding(.leading, 4)
-                                    .allowsHitTesting(false)
+                    // Tabs: Declutter and Goals
+                    VStack(spacing: 0) {
+                        // Tab selector
+                        HStack(spacing: isFullscreen ? 30 : 20) {
+                            Button(action: { showGoals = false }) {
+                                Text("DECLUTTER")
+                                    .font(.custom("Anta-Regular", size: isFullscreen ? 12 : 10))
+                                    .foregroundColor(showGoals ? .black.opacity(0.3) : .black)
+                                    .tracking(2)
                             }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: { showGoals = true }) {
+                                Text("GOALS")
+                                    .font(.custom("Anta-Regular", size: isFullscreen ? 12 : 10))
+                                    .foregroundColor(showGoals ? .black : .black.opacity(0.3))
+                                    .tracking(2)
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Spacer()
+                        }
+                        .padding(.horizontal, isFullscreen ? 40 : 20)
+                        .padding(.bottom, isFullscreen ? 16 : 12)
+                        
+                        // Content based on selected tab
+                        if showGoals {
+                            GoalsSectionView(isFullscreen: $isFullscreen)
+                        } else {
+                            // Declutter section
+                            VStack(alignment: .leading, spacing: isFullscreen ? 16 : 12) {
+                                ZStack(alignment: .topLeading) {
+                                    TextEditor(text: $journalText)
+                                        .font(.system(size: fontSize, weight: .light))
+                                        .foregroundColor(.black)
+                                        .scrollContentBackground(.hidden)
+                                        .background(Color.clear)
+                                        .tint(.black)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                    
+                                    if journalText.isEmpty {
+                                        Text("Type your first thought...")
+                                            .font(.system(size: fontSize, weight: .light))
+                                            .foregroundColor(.black.opacity(0.3))
+                                            .padding(.top, 0)
+                                            .padding(.leading, 4)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, isFullscreen ? 40 : 20)
                         }
                     }
-                    .padding(.horizontal, isFullscreen ? 40 : 20)
                     .frame(maxHeight: .infinity)
                     
                     // Bottom toolbar
@@ -715,6 +744,188 @@ struct SudokuCellView: View {
         } else {
             return Color.white
         }
+    }
+}
+
+// MARK: - Goals Section View
+struct GoalsSectionView: View {
+    @Binding var isFullscreen: Bool
+    @ObservedObject private var goalManager = GoalManager.shared
+    @ObservedObject private var sessionManager = SessionManager.shared
+    @ObservedObject private var usageTracker = UsageTracker.shared
+    
+    @State private var newGoalText: String = ""
+    @State private var editingGoalId: UUID? = nil
+    
+    private var todayGoals: [Goal] {
+        goalManager.getTodayGoals()
+    }
+    
+    private var canAddGoal: Bool {
+        usageTracker.canSetGoal(for: sessionManager.preferences.tier)
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: isFullscreen ? 16 : 12) {
+            // Add goal input
+            if canAddGoal {
+                HStack(spacing: isFullscreen ? 12 : 8) {
+                    TextField("Add a goal...", text: $newGoalText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: isFullscreen ? 14 : 12, weight: .light))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, isFullscreen ? 12 : 10)
+                        .padding(.vertical, isFullscreen ? 8 : 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.black.opacity(0.2), lineWidth: 1)
+                        )
+                        .onSubmit {
+                            addGoal()
+                        }
+                    
+                    Button(action: addGoal) {
+                        Text("ADD")
+                            .font(.custom("Anta-Regular", size: isFullscreen ? 12 : 10))
+                            .foregroundColor(.black)
+                            .tracking(1)
+                            .padding(.horizontal, isFullscreen ? 16 : 12)
+                            .padding(.vertical, isFullscreen ? 8 : 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.black.opacity(0.1))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(newGoalText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .opacity(newGoalText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.3 : 1.0)
+                }
+            } else {
+                // Limit reached message
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 12))
+                        .foregroundColor(.black.opacity(0.3))
+                    
+                    Text(usageTracker.getUsageText(for: .goals, tier: sessionManager.preferences.tier))
+                        .font(.system(size: isFullscreen ? 12 : 10, weight: .light))
+                        .foregroundColor(.black.opacity(0.4))
+                }
+                .padding(.vertical, isFullscreen ? 8 : 6)
+            }
+            
+            // Goals list
+            if todayGoals.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No goals yet")
+                        .font(.system(size: isFullscreen ? 13 : 11, weight: .light))
+                        .foregroundColor(.black.opacity(0.3))
+                        .italic()
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, isFullscreen ? 20 : 15)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: isFullscreen ? 12 : 8) {
+                        ForEach(todayGoals) { goal in
+                            GoalRowView(
+                                goal: goal,
+                                isFullscreen: isFullscreen,
+                                isEditing: editingGoalId == goal.id,
+                                onToggle: {
+                                    goalManager.toggleGoal(goal)
+                                },
+                                onDelete: {
+                                    goalManager.deleteGoal(goal)
+                                },
+                                onEdit: { newText in
+                                    goalManager.updateGoal(goal, newText: newText)
+                                    editingGoalId = nil
+                                },
+                                onStartEdit: {
+                                    editingGoalId = goal.id
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, isFullscreen ? 40 : 20)
+    }
+    
+    private func addGoal() {
+        let text = newGoalText.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        
+        goalManager.addGoal(text)
+        newGoalText = ""
+    }
+}
+
+// MARK: - Goal Row View
+struct GoalRowView: View {
+    let goal: Goal
+    let isFullscreen: Bool
+    let isEditing: Bool
+    let onToggle: () -> Void
+    let onDelete: () -> Void
+    let onEdit: (String) -> Void
+    let onStartEdit: () -> Void
+    
+    @State private var editText: String = ""
+    @FocusState private var isFocused: Bool
+    
+    var body: some View {
+        HStack(spacing: isFullscreen ? 12 : 8) {
+            // Checkbox
+            Button(action: onToggle) {
+                Image(systemName: goal.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: isFullscreen ? 18 : 14))
+                    .foregroundColor(goal.isCompleted ? .black : .black.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+            
+            // Goal text
+            if isEditing {
+                TextField("", text: $editText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: isFullscreen ? 14 : 12, weight: .light))
+                    .foregroundColor(.black)
+                    .focused($isFocused)
+                    .onAppear {
+                        editText = goal.text
+                        isFocused = true
+                    }
+                    .onSubmit {
+                        onEdit(editText)
+                    }
+            } else {
+                Text(goal.text)
+                    .font(.system(size: isFullscreen ? 14 : 12, weight: .light))
+                    .foregroundColor(goal.isCompleted ? .black.opacity(0.5) : .black)
+                    .strikethrough(goal.isCompleted)
+                    .onTapGesture {
+                        onStartEdit()
+                    }
+            }
+            
+            Spacer()
+            
+            // Delete button
+            Button(action: onDelete) {
+                Image(systemName: "xmark")
+                    .font(.system(size: isFullscreen ? 12 : 10))
+                    .foregroundColor(.black.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, isFullscreen ? 12 : 10)
+        .padding(.vertical, isFullscreen ? 10 : 8)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.black.opacity(0.02))
+        )
     }
 }
 
