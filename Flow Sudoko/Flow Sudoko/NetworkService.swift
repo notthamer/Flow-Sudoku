@@ -57,7 +57,23 @@ class NetworkService {
             request.httpBody = try JSONEncoder().encode(body)
         }
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            // Check for network connectivity issues
+            if let urlError = error as? URLError {
+                switch urlError.code {
+                case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost:
+                    throw NetworkError.noConnection
+                case .timedOut:
+                    throw NetworkError.serverError("Request timed out. Please check your connection.")
+                default:
+                    throw NetworkError.serverError("Network error: \(urlError.localizedDescription)")
+                }
+            }
+            throw NetworkError.serverError("Network error: \(error.localizedDescription)")
+        }
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NetworkError.invalidResponse
@@ -73,12 +89,44 @@ class NetworkService {
         guard (200...299).contains(httpResponse.statusCode) else {
             // Try to decode error response
             if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
-                print("❌ Error: \(errorResponse.error.message)")
-                throw NetworkError.serverError(errorResponse.error.message)
+                let errorMessage = errorResponse.error?.message ?? errorResponse.error_description ?? "Unknown error"
+                let errorCode = errorResponse.error?.code ?? ""
+                let messageLower = errorMessage.lowercased()
+                let codeLower = errorCode.lowercased()
+                
+                print("❌ Error: \(errorMessage) (Code: \(errorCode))")
+                
+                // Parse Supabase error codes and messages
+                // Supabase uses "invalid_grant" for invalid credentials
+                if codeLower == "invalid_grant" || messageLower.contains("invalid login") || messageLower.contains("invalid password") || messageLower.contains("invalid credentials") {
+                    // For invalid_grant, we can't distinguish between wrong email vs wrong password
+                    // But typically Supabase returns this for wrong password when email exists
+                    // We'll show "Incorrect password" as it's more common
+                    throw NetworkError.invalidPassword
+                } else if messageLower.contains("user not found") || messageLower.contains("email not found") || messageLower.contains("no user found") {
+                    throw NetworkError.userNotFound
+                } else if codeLower == "user_already_registered" || messageLower.contains("user already registered") || messageLower.contains("email already exists") || messageLower.contains("already registered") || messageLower.contains("already exists") {
+                    throw NetworkError.emailExists
+                } else {
+                    throw NetworkError.serverError(errorMessage)
+                }
             }
+            
+            // Try parsing as plain string
             if let errorString = String(data: data, encoding: .utf8) {
-                print("❌ Server error: \(errorString)")
+                print("❌ Server error (raw): \(errorString)")
+                let lowercased = errorString.lowercased()
+                
+                // Parse common error patterns
+                if lowercased.contains("invalid_grant") || lowercased.contains("invalid login") || lowercased.contains("invalid password") || lowercased.contains("invalid credentials") {
+                    throw NetworkError.invalidPassword
+                } else if lowercased.contains("user not found") || lowercased.contains("email not found") || lowercased.contains("no user found") {
+                    throw NetworkError.userNotFound
+                } else if lowercased.contains("already registered") || lowercased.contains("email exists") || lowercased.contains("already exists") {
+                    throw NetworkError.emailExists
+                }
             }
+            
             throw NetworkError.httpError(httpResponse.statusCode)
         }
         
@@ -94,6 +142,16 @@ class NetworkService {
     func clearToken() {
         accessToken = nil
     }
+    
+    func hasToken() -> Bool {
+        return accessToken != nil
+    }
+}
+
+// MARK: - Empty Response (for endpoints that don't return data)
+
+struct EmptyResponse: Codable {
+    // Empty response for endpoints that don't return data
 }
 
 // MARK: - HTTP Method
@@ -115,6 +173,9 @@ enum NetworkError: LocalizedError {
     case serverError(String)
     case decodingError
     case noConnection
+    case invalidPassword
+    case userNotFound
+    case emailExists
     
     var errorDescription: String? {
         switch self {
@@ -129,7 +190,13 @@ enum NetworkError: LocalizedError {
         case .decodingError:
             return "Failed to decode response"
         case .noConnection:
-            return "No internet connection"
+            return "No internet connection. Please check your network."
+        case .invalidPassword:
+            return "Incorrect password"
+        case .userNotFound:
+            return "Email not found"
+        case .emailExists:
+            return "Email already registered"
         }
     }
 }
@@ -204,11 +271,38 @@ struct SessionsResponse: Codable {
 }
 
 struct ErrorResponse: Codable {
-    let error: ErrorDetail
+    let error: ErrorDetail?
+    let error_description: String? // Supabase auth format
+    
+    // Supabase auth errors can also be just a string
+    enum CodingKeys: String, CodingKey {
+        case error
+        case error_description
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        error_description = try? container.decode(String.self, forKey: .error_description)
+        
+        // Try to decode error as ErrorDetail first
+        if let errorDetail = try? container.decode(ErrorDetail.self, forKey: .error) {
+            error = errorDetail
+        } else if let errorString = try? container.decode(String.self, forKey: .error) {
+            // If error is a string (Supabase auth format), convert to ErrorDetail
+            error = ErrorDetail(code: errorString, message: error_description ?? errorString)
+        } else {
+            error = nil
+        }
+    }
 }
 
 struct ErrorDetail: Codable {
     let code: String
     let message: String
+    
+    init(code: String, message: String) {
+        self.code = code
+        self.message = message
+    }
 }
 

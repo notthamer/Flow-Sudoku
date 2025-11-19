@@ -25,9 +25,20 @@ class AuthService: ObservableObject {
     // MARK: - Authentication
     
     func signIn(email: String, password: String, completion: @escaping (Result<User, AuthError>) -> Void) {
+        // Validate input
+        guard !email.isEmpty, !password.isEmpty else {
+            completion(.failure(.unknown("Please enter both email and password")))
+            return
+        }
+        
+        guard email.contains("@") && email.contains(".") else {
+            completion(.failure(.unknown("Please enter a valid email address")))
+            return
+        }
+        
         Task {
             do {
-                let request = SignInRequest(email: email, password: password)
+                let request = SignInRequest(email: email.lowercased().trimmingCharacters(in: .whitespaces), password: password)
                 let response: SupabaseAuthResponse = try await NetworkService.shared.request(
                     endpoint: "/auth/v1/token?grant_type=password",
                     method: .post,
@@ -62,16 +73,34 @@ class AuthService: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    completion(.failure(.networkError))
+                    let authError = self.mapError(error)
+                    print("❌ Sign in error: \(authError.localizedDescription ?? "Unknown error")")
+                    completion(.failure(authError))
                 }
             }
         }
     }
     
     func signUp(email: String, password: String, firstName: String, lastName: String, completion: @escaping (Result<User, AuthError>) -> Void) {
+        // Validate input
+        guard !email.isEmpty, !password.isEmpty, !firstName.isEmpty, !lastName.isEmpty else {
+            completion(.failure(.unknown("Please fill in all fields")))
+            return
+        }
+        
+        guard email.contains("@") && email.contains(".") else {
+            completion(.failure(.unknown("Please enter a valid email address")))
+            return
+        }
+        
+        guard password.count >= 6 else {
+            completion(.failure(.unknown("Password must be at least 6 characters")))
+            return
+        }
+        
         Task {
             do {
-                let request = SignUpRequest(email: email, password: password)
+                let request = SignUpRequest(email: email.lowercased().trimmingCharacters(in: .whitespaces), password: password)
                 let response: SupabaseAuthResponse = try await NetworkService.shared.request(
                     endpoint: "/auth/v1/signup",
                     method: .post,
@@ -178,7 +207,8 @@ class AuthService: ObservableObject {
             } catch {
                 print("❌ Sign up error: \(error)")
                 await MainActor.run {
-                    completion(.failure(.networkError))
+                    let authError = self.mapError(error)
+                    completion(.failure(authError))
                 }
             }
         }
@@ -209,11 +239,38 @@ class AuthService: ObservableObject {
     }
     
     func signOut() {
-        currentUser = nil
-        isAuthenticated = false
-        UserDefaults.standard.removeObject(forKey: userKey)
-        NetworkService.shared.clearToken()
-        print("👋 User signed out")
+        Task {
+            // Try to call Supabase sign out endpoint if we have a token
+            // Note: Supabase logout might fail if token is expired, which is fine
+            if NetworkService.shared.hasToken() {
+                do {
+                    // Supabase sign out endpoint - POST with auth header
+                    let _: EmptyResponse = try await NetworkService.shared.request(
+                        endpoint: "/auth/v1/logout",
+                        method: .post,
+                        requiresAuth: true
+                    )
+                    print("✅ Signed out from Supabase")
+                } catch {
+                    // If logout fails (e.g., token expired), that's okay - we'll clear local state anyway
+                    print("⚠️ Supabase sign out failed (token may be expired, continuing): \(error)")
+                }
+            }
+            
+            await MainActor.run {
+                currentUser = nil
+                isAuthenticated = false
+                UserDefaults.standard.removeObject(forKey: userKey)
+                NetworkService.shared.clearToken()
+                
+                // Reset SessionManager to free tier
+                var prefs = SessionManager.shared.preferences
+                prefs.tier = .free
+                SessionManager.shared.updatePreferences(prefs)
+                
+                print("👋 User signed out")
+            }
+        }
     }
     
     func continueAsGuest() {
@@ -251,6 +308,37 @@ class AuthService: ObservableObject {
             print("✅ User loaded: \(user.email)")
         }
     }
+    
+    // MARK: - Error Mapping
+    
+    private func mapError(_ error: Error) -> AuthError {
+        if let networkError = error as? NetworkError {
+            switch networkError {
+            case .invalidPassword:
+                return .invalidPassword
+            case .userNotFound:
+                return .userNotFound
+            case .emailExists:
+                return .emailAlreadyExists
+            case .noConnection:
+                return .networkError
+            default:
+                return .networkError
+            }
+        }
+        
+        // Check error message for common patterns
+        let errorMessage = error.localizedDescription.lowercased()
+        if errorMessage.contains("password") || errorMessage.contains("invalid login") {
+            return .invalidPassword
+        } else if errorMessage.contains("not found") || errorMessage.contains("email not found") {
+            return .userNotFound
+        } else if errorMessage.contains("already") || errorMessage.contains("exists") {
+            return .emailAlreadyExists
+        }
+        
+        return .unknown(error.localizedDescription)
+    }
 }
 
 // MARK: - User Model
@@ -283,6 +371,7 @@ struct User: Codable {
 
 enum AuthError: LocalizedError {
     case invalidCredentials
+    case invalidPassword
     case userNotFound
     case emailAlreadyExists
     case networkError
@@ -293,12 +382,14 @@ enum AuthError: LocalizedError {
         switch self {
         case .invalidCredentials:
             return "Invalid email or password"
+        case .invalidPassword:
+            return "Incorrect password"
         case .userNotFound:
-            return "User not found"
+            return "Email not found"
         case .emailAlreadyExists:
             return "Email already registered"
         case .networkError:
-            return "Network error. Please try again"
+            return "Network error. Please check your connection and try again"
         case .notImplemented:
             return "Feature coming soon"
         case .unknown(let message):
